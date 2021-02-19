@@ -65,17 +65,19 @@ motions = [ # (distance moved, joystick along same axis, joystick along opposite
 start_position = [float32(-700), float32(0)]
 
 goal_positions = [
-    [toFloat(0xC41C7A04), toFloat(0xC309C8E1)],
-    [toFloat(0xC41C7A24), toFloat(0xC309CB64)],
-    [toFloat(0xC432D701), toFloat(0xC2CBEFF1)],
-    [toFloat(0xC41DFA31), toFloat(0xC3055CE6)],
-    [toFloat(0xC417FA1C), toFloat(0xC31058FA)],
-    [toFloat(0xC41EFA6D), toFloat(0xC30D50FD)],
+    [toFloat(0xC41C7A04), toFloat(0xC309C8E1)+float32(17.5)],
+    #[toFloat(0xC41C7A24), toFloat(0xC309CB64)+float32(17.5)],
+    #[toFloat(0xC432D701), toFloat(0xC2CBEFF1)+float32(17.5)],
+    #[toFloat(0xC41DFA31), toFloat(0xC3055CE6)+float32(17.5)],
+    #[toFloat(0xC417FA1C), toFloat(0xC31058FA)+float32(17.5)],
+    #[toFloat(0xC41EFA6D), toFloat(0xC30D50FD)+float32(17.5)],
 ]
 
 print(goal_positions)
 
 position = start_position
+
+lua_file = open('go_to_positions.lua','w')
 
 def printMotion(motion, position, axis):
     distance, sameAxis, oppositeAxis, jump = motion
@@ -85,15 +87,42 @@ def printMotion(motion, position, axis):
     else:
         y = -sameAxis
         x = oppositeAxis
-    print('X: %4d, Y: %4d, Jump: %-5s -- Position: %11.6f, %11.6f (%s%s)' % (x, y, jump, position[0], position[1], '+' if distance >= 0 else '', distance))
+    if not jump:
+        jump_str = 'False'
+    elif not has_jumped or frames_since_jump%9 == 0:
+        jump_str = 'Start'
+    else:
+        jump_str = 'Cont.'
+    print('X: %4d, Y: %4d, Jump: %-5s -- Position: %11.6f, %11.6f (%s%s)' % (x, y, jump_str, position[0], position[1], '+' if distance >= 0 else '', distance))
+    if jump and (not has_jumped or frames_since_jump%9 == 0):
+        lua_file.write('\tjoypad.setanalog({["P1 X Axis"]=0, ["P1 Y Axis"]=0})\n')
+        lua_file.write('\temu.frameadvance()\n')
+        lua_file.write('\temu.frameadvance()\n')
+        if has_jumped:
+            lua_file.write('\temu.frameadvance()\n')
+            lua_file.write('\temu.frameadvance()\n')
+        lua_file.write('\tjoypad.set({["P1 A"]="True"})\n')
+    lua_file.write('\tjoypad.setanalog({["P1 X Axis"]=%d, ["P1 Y Axis"]=%d})\n'%(x,y))
+    lua_file.write('\temu.frameadvance()\n')
+    if jump and (not has_jumped or frames_since_jump%9 == 0):
+        lua_file.write('\tjoypad.set({["P1 A"]="True"})\n')
+    lua_file.write('\temu.frameadvance()\n')
+    if jump and (not has_jumped or frames_since_jump%9 == 0):
+        lua_file.write('\tjoypad.set({["P1 A"]="False"})\n')
 
-for goal_position in goal_positions:
+for i in range(len(goal_positions)):
+    goal_position = goal_positions[i]
 
     print('Start:', position)
     print('Goal:', goal_position)
 
+    lua_file.write('function goToGoal%d()\n'%i)
+
     stepcount = 0
     for axis in range(2):
+
+        has_jumped = False
+        frames_since_jump = np.NaN
 
         while position[axis] != goal_position[axis]:
             closest_distance = abs(goal_position[axis] - position[axis])
@@ -102,6 +131,10 @@ for goal_position in goal_positions:
             chosen_motion3 = None
             
             for motion1 in motions:
+
+                if has_jumped and not motion1[3]:
+                    continue
+                
                 dist = abs(goal_position[axis] - (position[axis]+motion1[0]))
                 if dist < closest_distance:
                     chosen_motion1 = motion1
@@ -110,6 +143,10 @@ for goal_position in goal_positions:
                     closest_distance = dist
                     
                 for motion2 in motions:
+                    
+                    if motion1[3] and not motion2[3]:
+                        continue
+                    
                     dist = abs(goal_position[axis] - ((position[axis]+motion1[0])+motion2[0]))
                     if dist < closest_distance:
                         chosen_motion1 = motion1
@@ -118,6 +155,10 @@ for goal_position in goal_positions:
                         closest_distance = dist
                         
                     for motion3 in motions:
+                    
+                        if motion2[3] and not motion3[3]:
+                            continue
+                        
                         dist = abs(goal_position[axis] - (((position[axis]+motion1[0])+motion2[0])+motion3[0]))
                         if dist < closest_distance:
                             chosen_motion1 = motion1
@@ -131,19 +172,45 @@ for goal_position in goal_positions:
 
             position[axis] += chosen_motion1[0]
             printMotion(chosen_motion1, position, axis)
+            if not has_jumped and chosen_motion1[3]:
+                has_jumped = True
+                frames_since_jump = 0
             stepcount += 1
+            frames_since_jump += 1
+                
             if chosen_motion2 is not None:
                 position[axis] += chosen_motion2[0]
                 printMotion(chosen_motion2, position, axis)
+                if not has_jumped and chosen_motion2[3]:
+                    has_jumped = True
+                    frames_since_jump = 0
                 stepcount += 1
+                frames_since_jump += 1
+                    
             if chosen_motion3 is not None:
                 position[axis] += chosen_motion3[0]
                 printMotion(chosen_motion3, position, axis)
+                if not has_jumped and chosen_motion3[3]:
+                    has_jumped = True
+                    frames_since_jump = 0
                 stepcount += 1
+                frames_since_jump += 1
 
             if position[axis] == goal_position[axis]:
                 print(['Solved X axis.','Solved Z Axis.'][axis])
                 break
 
+        lua_file.write('\tjoypad.setanalog({["P1 X Axis"]=0, ["P1 Y Axis"]=0})\n')
+        if has_jumped:
+            lua_file.write('\temu.frameadvance()\n')
+            lua_file.write('\temu.frameadvance()\n')
+            while frames_since_jump%9 != 0:
+                lua_file.write('\temu.frameadvance()\n')
+                lua_file.write('\temu.frameadvance()\n')
+                frames_since_jump += 1
+
     print('Total steps:', stepcount)
     print()
+    
+    lua_file.write('end\ngoToGoal%d()\n\n'%i)
+lua_file.close()
